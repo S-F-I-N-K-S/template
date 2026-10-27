@@ -2,20 +2,35 @@ package postgres
 
 import (
 	"context"
-	"time"
+	"fmt"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/S-F-I-N-K-S/template/internal/config"
 )
 
-type Config struct {
-	URL                string
-	MaxConns, MinConns int32
-	MaxConnLifetime    time.Duration
-	ConnectTimeout     time.Duration
-	Tracer             pgx.QueryTracer
-}
+func NewPool(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
+	poolCfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse database url: %w", err)
+	}
 
-func NewPool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
-	panic("TODO: postgres.NewPool")
+	poolCfg.MaxConns = cfg.DatabaseMaxConns
+	poolCfg.MinConns = cfg.DatabaseMinConns
+	poolCfg.MaxConnLifetime = cfg.DatabaseMaxConnLifetime
+
+	connectCtx, cancel := context.WithTimeout(ctx, cfg.DatabaseConnectTimeout)
+	defer cancel()
+
+	pool, err := pgxpool.NewWithConfig(connectCtx, poolCfg)
+	if err != nil {
+		return nil, fmt.Errorf("create pool: %w", err)
+	}
+
+	if err := pool.Ping(connectCtx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping database: %w", err)
+	}
+
+	return pool, nil
 }

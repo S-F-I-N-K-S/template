@@ -22,4 +22,9 @@ type (
 	}
 	clock   interface{ Now() time.Time }
 	metrics interface{ TripCreated(ctx context.Context) }
+	logger  interface {
+		Info(msg string, args ...any)
+		Error(msg string, args ...any)
+	}
+	idGenerator interface{ New() uuid.UUID }
 )

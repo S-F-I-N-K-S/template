@@ -5,6 +5,7 @@ import (
 
 	api "github.com/S-F-I-N-K-S/template/internal/generated"
 	"github.com/S-F-I-N-K-S/template/internal/http/domainerror"
+	"github.com/S-F-I-N-K-S/template/internal/http/trip/create"
 )
 
 type Handler struct {
@@ -17,5 +18,11 @@ func New(uc usecase, errs *domainerror.Writer) *Handler {
 }
 
 func (h *Handler) Handle(w http.ResponseWriter, r *http.Request, tripID api.TripId) {
-	panic("TODO: finish.Handler.Handle")
+	t, err := h.uc.Execute(r.Context(), tripID)
+	if err != nil {
+		h.errs.Write(w, r, err)
+		return
+	}
+
+	create.WriteTrip(w, http.StatusOK, t)
 }

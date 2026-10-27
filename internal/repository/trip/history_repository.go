@@ -1,4 +1,4 @@
-package repository
+package trip
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/S-F-I-N-K-S/template/internal/txmanager"
+	"github.com/S-F-I-N-K-S/template/internal/infra/transaction"
 )
 
 type HistoryRepository struct {
@@ -20,11 +20,11 @@ func NewHistoryRepository(pool *pgxpool.Pool, queryTimeout time.Duration) *Histo
 	return &HistoryRepository{pool: pool, queryTimeout: queryTimeout}
 }
 
-func (r *HistoryRepository) Append(ctx context.Context, tripID uuid.UUID, fromStatus, toStatus, reason string) error {
+func (r *HistoryRepository) AppendHistory(ctx context.Context, tripID uuid.UUID, fromStatus, toStatus, reason string) error {
 	ctx, cancel := context.WithTimeout(ctx, r.queryTimeout)
 	defer cancel()
 
-	q := txmanager.QuerierFromContext(ctx, r.pool)
+	q := transaction.QuerierFromContext(ctx, r.pool)
 
 	query, args, err := sq.Insert("trip_status_history").
 		Columns("trip_id", "from_status", "to_status", "reason").

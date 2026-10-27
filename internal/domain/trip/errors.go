@@ -16,3 +16,7 @@ type ValidationError struct {
 func (e *ValidationError) Error() string {
 	return e.Field + ": " + e.Reason
 }
+
+func newValidation(field, reason string) *ValidationError {
+	return &ValidationError{Field: field, Reason: reason}
+}

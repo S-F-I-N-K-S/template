@@ -1,4 +1,4 @@
-package repository
+package trip
 
 import (
 	"context"
@@ -12,26 +12,26 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/S-F-I-N-K-S/template/internal/domain"
-	"github.com/S-F-I-N-K-S/template/internal/txmanager"
+	domaintrip "github.com/S-F-I-N-K-S/template/internal/domain/trip"
+	"github.com/S-F-I-N-K-S/template/internal/infra/transaction"
 )
 
 var sq = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
 
-type TripRepository struct {
+type Repository struct {
 	pool         *pgxpool.Pool
 	queryTimeout time.Duration
 }
 
-func NewTripRepository(pool *pgxpool.Pool, queryTimeout time.Duration) *TripRepository {
-	return &TripRepository{pool: pool, queryTimeout: queryTimeout}
+func NewRepository(pool *pgxpool.Pool, queryTimeout time.Duration) *Repository {
+	return &Repository{pool: pool, queryTimeout: queryTimeout}
 }
 
-func (r *TripRepository) Create(ctx context.Context, t domain.Trip) error {
+func (r *Repository) Save(ctx context.Context, t domaintrip.Trip) error {
 	ctx, cancel := context.WithTimeout(ctx, r.queryTimeout)
 	defer cancel()
 
-	q := txmanager.QuerierFromContext(ctx, r.pool)
+	q := transaction.QuerierFromContext(ctx, r.pool)
 
 	query, args, err := sq.Insert("trips").
 		Columns(
@@ -44,7 +44,7 @@ func (r *TripRepository) Create(ctx context.Context, t domain.Trip) error {
 			t.ID, t.UserID, t.DriverID,
 			t.StartPoint.Latitude, t.StartPoint.Longitude,
 			t.EndPoint.Latitude, t.EndPoint.Longitude,
-			t.Price, t.Status, t.StartedAt,
+			t.Price, string(t.Status), t.StartedAt,
 		).
 		ToSql()
 	if err != nil {
@@ -54,18 +54,18 @@ func (r *TripRepository) Create(ctx context.Context, t domain.Trip) error {
 	if _, err := q.Exec(ctx, query, args...); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return domain.ErrDriverBusy
+			return domaintrip.ErrDriverBusy
 		}
 		return fmt.Errorf("insert trip: %w", err)
 	}
 	return nil
 }
 
-func (r *TripRepository) GetByID(ctx context.Context, id uuid.UUID) (domain.Trip, error) {
+func (r *Repository) GetByID(ctx context.Context, id uuid.UUID) (domaintrip.Trip, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.queryTimeout)
 	defer cancel()
 
-	q := txmanager.QuerierFromContext(ctx, r.pool)
+	q := transaction.QuerierFromContext(ctx, r.pool)
 
 	query, args, err := sq.Select(
 		"id", "user_id", "driver_id",
@@ -74,36 +74,40 @@ func (r *TripRepository) GetByID(ctx context.Context, id uuid.UUID) (domain.Trip
 		"price", "status", "started_at", "finished_at",
 	).From("trips").Where(squirrel.Eq{"id": id}).ToSql()
 	if err != nil {
-		return domain.Trip{}, fmt.Errorf("build select trip query: %w", err)
+		return domaintrip.Trip{}, fmt.Errorf("build select trip query: %w", err)
 	}
 
-	var t domain.Trip
+	var (
+		t    domaintrip.Trip
+		stat string
+	)
 	err = q.QueryRow(ctx, query, args...).Scan(
 		&t.ID, &t.UserID, &t.DriverID,
 		&t.StartPoint.Latitude, &t.StartPoint.Longitude,
 		&t.EndPoint.Latitude, &t.EndPoint.Longitude,
-		&t.Price, &t.Status, &t.StartedAt, &t.FinishedAt,
+		&t.Price, &stat, &t.StartedAt, &t.FinishedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.Trip{}, domain.ErrTripNotFound
+		return domaintrip.Trip{}, domaintrip.ErrTripNotFound
 	}
 	if err != nil {
-		return domain.Trip{}, fmt.Errorf("scan trip: %w", err)
+		return domaintrip.Trip{}, fmt.Errorf("scan trip: %w", err)
 	}
+	t.Status = domaintrip.Status(stat)
 	return t, nil
 }
 
-func (r *TripRepository) Finish(ctx context.Context, id uuid.UUID, finishedAt time.Time) error {
+func (r *Repository) Finish(ctx context.Context, id uuid.UUID, finishedAt time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, r.queryTimeout)
 	defer cancel()
 
-	q := txmanager.QuerierFromContext(ctx, r.pool)
+	q := transaction.QuerierFromContext(ctx, r.pool)
 
 	query, args, err := sq.Update("trips").
-		Set("status", domain.StatusCompleted).
+		Set("status", string(domaintrip.StatusCompleted)).
 		Set("finished_at", finishedAt).
 		Set("updated_at", squirrel.Expr("now()")).
-		Where(squirrel.Eq{"id": id, "status": domain.StatusActive}).
+		Where(squirrel.Eq{"id": id, "status": string(domaintrip.StatusActive)}).
 		ToSql()
 	if err != nil {
 		return fmt.Errorf("build update trip query: %w", err)
@@ -114,10 +118,10 @@ func (r *TripRepository) Finish(ctx context.Context, id uuid.UUID, finishedAt ti
 		return fmt.Errorf("finish trip: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		if _, err := r.GetByID(ctx, id); errors.Is(err, domain.ErrTripNotFound) {
-			return domain.ErrTripNotFound
+		if _, err := r.GetByID(ctx, id); errors.Is(err, domaintrip.ErrTripNotFound) {
+			return domaintrip.ErrTripNotFound
 		}
-		return domain.ErrTripCompleted
+		return domaintrip.ErrTripCompleted
 	}
 	return nil
 }
