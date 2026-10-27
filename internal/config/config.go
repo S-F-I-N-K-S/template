@@ -2,14 +2,17 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"time"
 )
 
+const protocolHTTPProtobuf = "http/protobuf"
+
 type Config struct {
 	HTTPAddr        string
-	LogLevel        string
+	LogLevel        slog.Level
 	ShutdownTimeout time.Duration
 
 	HTTPReadTimeout       time.Duration
@@ -23,15 +26,21 @@ type Config struct {
 	DatabaseConnectTimeout  time.Duration
 	DatabaseQueryTimeout    time.Duration
 	DatabaseMaxConnLifetime time.Duration
+
+	ServiceVersion string
+	OTLPEndpoint   string
+	OTLPProtocol   string
 }
 
 func Load() (*Config, error) {
 	var errs []string
 
 	cfg := &Config{
-		HTTPAddr: getEnvDefault("HTTP_ADDR", ":8080"),
-		LogLevel: getEnvDefault("LOG_LEVEL", "info"),
+		HTTPAddr:       getEnvDefault("HTTP_ADDR", ":8080"),
+		ServiceVersion: getEnvDefault("SERVICE_VERSION", "dev"),
 	}
+
+	cfg.LogLevel = parseLogLevel(getEnvDefault("LOG_LEVEL", "info"), &errs)
 
 	cfg.HTTPReadTimeout = getDurationDefault("HTTP_READ_TIMEOUT", 5*time.Second, &errs)
 	cfg.HTTPReadHeaderTimeout = getDurationDefault("HTTP_READ_HEADER_TIMEOUT", 3*time.Second, &errs)
@@ -40,11 +49,19 @@ func Load() (*Config, error) {
 
 	cfg.ShutdownTimeout = mustDuration("SHUTDOWN_TIMEOUT", &errs)
 	cfg.DatabaseURL = mustString("DATABASE_URL", &errs)
-	cfg.DatabaseMaxConns = int32(mustInt("DATABASE_MAX_CONNS", &errs))
-	cfg.DatabaseMinConns = int32(mustInt("DATABASE_MIN_CONNS", &errs))
+	cfg.DatabaseMaxConns = mustInt32("DATABASE_MAX_CONNS", &errs)
+	cfg.DatabaseMinConns = mustInt32("DATABASE_MIN_CONNS", &errs)
 	cfg.DatabaseConnectTimeout = mustDuration("DATABASE_CONNECT_TIMEOUT", &errs)
 	cfg.DatabaseQueryTimeout = mustDuration("DATABASE_QUERY_TIMEOUT", &errs)
 	cfg.DatabaseMaxConnLifetime = mustDuration("DATABASE_MAX_CONN_LIFETIME", &errs)
+
+	// Сам SDK читает OTEL_* из окружения. Здесь только fail-fast проверка:
+	// адрес не задан — ошибка конфига; коллектор недоступен — штатная работа.
+	cfg.OTLPEndpoint = mustString("OTEL_EXPORTER_OTLP_ENDPOINT", &errs)
+	cfg.OTLPProtocol = getEnvDefault("OTEL_EXPORTER_OTLP_PROTOCOL", protocolHTTPProtobuf)
+	if cfg.OTLPProtocol != protocolHTTPProtobuf {
+		errs = append(errs, fmt.Sprintf("OTEL_EXPORTER_OTLP_PROTOCOL: unsupported %q, only %q", cfg.OTLPProtocol, protocolHTTPProtobuf))
+	}
 
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("invalid config: %v", errs)
@@ -57,6 +74,15 @@ func getEnvDefault(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func parseLogLevel(v string, errs *[]string) slog.Level {
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(v)); err != nil {
+		*errs = append(*errs, fmt.Sprintf("LOG_LEVEL: invalid level %q: %v", v, err))
+		return slog.LevelInfo
+	}
+	return level
 }
 
 func getDurationDefault(key string, def time.Duration, errs *[]string) time.Duration {
@@ -93,15 +119,16 @@ func mustDuration(key string, errs *[]string) time.Duration {
 	return d
 }
 
-func mustInt(key string, errs *[]string) int {
+func mustInt32(key string, errs *[]string) int32 {
 	v := os.Getenv(key)
 	if v == "" {
 		*errs = append(*errs, fmt.Sprintf("%s is required", key))
 		return 0
 	}
-	n, err := strconv.Atoi(v)
+	n, err := strconv.ParseInt(v, 10, 32)
 	if err != nil {
-		*errs = append(*errs, fmt.Sprintf("%s: invalid int %q: %v", key, v, err))
+		*errs = append(*errs, fmt.Sprintf("%s: invalid int32 %q: %v", key, v, err))
+		return 0
 	}
-	return n
+	return int32(n) //nolint:gosec // ParseInt с bitSize=32 гарантирует диапазон int32
 }
