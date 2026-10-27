@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"log/slog"
+	"os"
 
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
@@ -24,5 +25,5 @@ func newOTLPLogExporter(ctx context.Context) (sdklog.Exporter, error) {
 }
 
 func newStdoutLogger(level slog.Level) *slog.Logger {
-	return slog.New(slog.NewJSONHandler(nil, &slog.HandlerOptions{Level: level}))
+	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 }

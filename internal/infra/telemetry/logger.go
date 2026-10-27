@@ -66,6 +66,13 @@ func (l *Logger) InfoCtx(ctx context.Context, msg string, args ...any) {
 }
 
 func (l *Logger) emit(ctx context.Context, sev log.Severity, level slog.Level, msg string, args ...any) {
+	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+		args = append([]any{
+			"trace_id", sc.TraceID().String(),
+			"span_id", sc.SpanID().String(),
+		}, args...)
+	}
+
 	switch level {
 	case slog.LevelDebug:
 		l.out.DebugContext(ctx, msg, args...)
