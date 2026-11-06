@@ -16,8 +16,8 @@ type HistoryRepository struct {
 	queryTimeout time.Duration
 }
 
-func NewHistoryRepository(pool *pgxpool.Pool, queryTimeout time.Duration) *HistoryRepository {
-	return &HistoryRepository{pool: pool, queryTimeout: queryTimeout}
+func NewHistoryRepository(pool *pgxpool.Pool) *HistoryRepository {
+	return &HistoryRepository{pool: pool}
 }
 
 func (r *HistoryRepository) Append(ctx context.Context, tripID uuid.UUID, fromStatus, toStatus, reason string) error {

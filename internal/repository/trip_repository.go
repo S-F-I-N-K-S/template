@@ -19,18 +19,14 @@ import (
 var sq = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
 
 type TripRepository struct {
-	pool         *pgxpool.Pool
-	queryTimeout time.Duration
+	pool *pgxpool.Pool
 }
 
-func NewTripRepository(pool *pgxpool.Pool, queryTimeout time.Duration) *TripRepository {
-	return &TripRepository{pool: pool, queryTimeout: queryTimeout}
+func NewTripRepository(pool *pgxpool.Pool) *TripRepository {
+	return &TripRepository{pool: pool}
 }
 
 func (r *TripRepository) Create(ctx context.Context, t domain.Trip) error {
-	ctx, cancel := context.WithTimeout(ctx, r.queryTimeout)
-	defer cancel()
-
 	q := txmanager.QuerierFromContext(ctx, r.pool)
 
 	query, args, err := sq.Insert("trips").
@@ -62,9 +58,6 @@ func (r *TripRepository) Create(ctx context.Context, t domain.Trip) error {
 }
 
 func (r *TripRepository) GetByID(ctx context.Context, id uuid.UUID) (domain.Trip, error) {
-	ctx, cancel := context.WithTimeout(ctx, r.queryTimeout)
-	defer cancel()
-
 	q := txmanager.QuerierFromContext(ctx, r.pool)
 
 	query, args, err := sq.Select(
@@ -94,9 +87,6 @@ func (r *TripRepository) GetByID(ctx context.Context, id uuid.UUID) (domain.Trip
 }
 
 func (r *TripRepository) Finish(ctx context.Context, id uuid.UUID, finishedAt time.Time) error {
-	ctx, cancel := context.WithTimeout(ctx, r.queryTimeout)
-	defer cancel()
-
 	q := txmanager.QuerierFromContext(ctx, r.pool)
 
 	query, args, err := sq.Update("trips").
@@ -113,11 +103,16 @@ func (r *TripRepository) Finish(ctx context.Context, id uuid.UUID, finishedAt ti
 	if err != nil {
 		return fmt.Errorf("finish trip: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		if _, err := r.GetByID(ctx, id); errors.Is(err, domain.ErrTripNotFound) {
-			return domain.ErrTripNotFound
-		}
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+
+	trip, err := r.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if trip.Status == domain.StatusCompleted {
 		return domain.ErrTripCompleted
 	}
-	return nil
+	return fmt.Errorf("finish trip %s: no rows updated, but trip status is %q", id, trip.Status)
 }
