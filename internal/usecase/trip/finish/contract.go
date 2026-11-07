@@ -24,7 +24,7 @@ type (
 	clock   interface{ Now() time.Time }
 	metrics interface{ TripCompleted(ctx context.Context) }
 	logger  interface {
-		Info(msg string, args ...any)
-		Error(msg string, args ...any)
+		InfoCtx(ctx context.Context, msg string, args ...any)
+		ErrorCtx(ctx context.Context, msg string, args ...any)
 	}
 )

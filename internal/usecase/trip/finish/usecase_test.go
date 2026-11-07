@@ -69,7 +69,7 @@ func TestExecute_Success(t *testing.T) {
 	d.trips.EXPECT().Finish(gomock.Any(), id, now).Return(nil)
 	d.history.EXPECT().AppendHistory(gomock.Any(), id, string(domaintrip.StatusActive), string(domaintrip.StatusCompleted), "trip finished").Return(nil)
 	d.metrics.EXPECT().TripCompleted(gomock.Any())
-	d.log.EXPECT().Info("trip completed", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+	d.log.EXPECT().InfoCtx(gomock.Any(), "trip completed", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 	uc := New(d.tx, d.trips, d.history, d.clock, d.metrics, d.log)
 	got, err := uc.Execute(context.Background(), id)
@@ -89,7 +89,7 @@ func TestExecute_NotFound(t *testing.T) {
 	d.clock.EXPECT().Now().Return(now)
 	passThrough(d.tx)
 	d.trips.EXPECT().GetByID(gomock.Any(), id).Return(domaintrip.Trip{}, domaintrip.ErrTripNotFound)
-	d.log.EXPECT().Info("trip finish: not found", gomock.Any(), gomock.Any())
+	d.log.EXPECT().InfoCtx(gomock.Any(), "trip finish: not found", gomock.Any(), gomock.Any())
 
 	uc := New(d.tx, d.trips, d.history, d.clock, d.metrics, d.log)
 	_, err := uc.Execute(context.Background(), id)
@@ -111,7 +111,7 @@ func TestExecute_AlreadyCompleted(t *testing.T) {
 	d.clock.EXPECT().Now().Return(now)
 	passThrough(d.tx)
 	d.trips.EXPECT().GetByID(gomock.Any(), id).Return(tr, nil)
-	d.log.EXPECT().Info("trip finish conflict: already completed", gomock.Any(), gomock.Any())
+	d.log.EXPECT().InfoCtx(gomock.Any(), "trip finish conflict: already completed", gomock.Any(), gomock.Any())
 
 	uc := New(d.tx, d.trips, d.history, d.clock, d.metrics, d.log)
 	_, err := uc.Execute(context.Background(), id)
@@ -133,7 +133,7 @@ func TestExecute_RepoError(t *testing.T) {
 	passThrough(d.tx)
 	d.trips.EXPECT().GetByID(gomock.Any(), id).Return(tr, nil)
 	d.trips.EXPECT().Finish(gomock.Any(), id, now).Return(dbErr)
-	d.log.EXPECT().Error("trip finish failed", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+	d.log.EXPECT().ErrorCtx(gomock.Any(), "trip finish failed", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 	uc := New(d.tx, d.trips, d.history, d.clock, d.metrics, d.log)
 	_, err := uc.Execute(context.Background(), id)

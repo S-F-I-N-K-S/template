@@ -41,7 +41,7 @@ func Problem(err error) (status int, body api.Problem, ok bool) {
 		if errors.Is(err, m.err) {
 			return m.status, api.Problem{
 				Code:   m.code,
-				Status: int32(m.status),
+				Status: int32(m.status), //nolint:gosec // G115: HTTP-статус из таблицы выше, всегда в диапазоне int32
 				Title:  m.title,
 				Type:   typeBlank,
 			}, true
@@ -55,7 +55,7 @@ func Problem(err error) (status int, body api.Problem, ok bool) {
 		return status, api.Problem{
 			Code:   CodeInvalidRequest,
 			Detail: &detail,
-			Status: int32(status),
+			Status: int32(status), //nolint:gosec // G115: HTTP-статус, всегда в диапазоне int32
 			Title:  "Invalid request",
 			Type:   typeBlank,
 		}, true
@@ -80,7 +80,7 @@ func (w *Writer) Write(rw http.ResponseWriter, r *http.Request, err error) {
 	status := http.StatusInternalServerError
 	w.writeProblem(rw, status, api.Problem{
 		Code:   CodeInternal,
-		Status: int32(status),
+		Status: int32(status), //nolint:gosec // G115: HTTP-статус, всегда в диапазоне int32
 		Title:  "Internal server error",
 		Type:   typeBlank,
 	}, r.URL.Path)
@@ -91,7 +91,7 @@ func (w *Writer) RequestError(rw http.ResponseWriter, r *http.Request, err error
 	w.log.InfoCtx(r.Context(), "request error", "path", r.URL.Path, "err", err)
 	w.writeProblem(rw, status, api.Problem{
 		Code:   CodeInvalidRequest,
-		Status: int32(status),
+		Status: int32(status), //nolint:gosec // G115: HTTP-статус, всегда в диапазоне int32
 		Title:  "Invalid request",
 		Type:   typeBlank,
 	}, r.URL.Path)

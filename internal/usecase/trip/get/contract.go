@@ -1,3 +1,4 @@
+//go:generate go tool mockgen -source ${GOFILE} -destination mocks_test.go -package ${GOPACKAGE}_test
 package get
 
 import (
@@ -13,7 +14,7 @@ type (
 		GetByID(ctx context.Context, id uuid.UUID) (domaintrip.Trip, error)
 	}
 	logger interface {
-		Info(msg string, args ...any)
-		Error(msg string, args ...any)
+		InfoCtx(ctx context.Context, msg string, args ...any)
+		ErrorCtx(ctx context.Context, msg string, args ...any)
 	}
 )

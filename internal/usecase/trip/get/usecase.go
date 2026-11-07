@@ -22,10 +22,10 @@ func (u *UseCase) Execute(ctx context.Context, id uuid.UUID) (domaintrip.Trip, e
 	t, err := u.trips.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, domaintrip.ErrTripNotFound) {
-			u.log.Info("trip not found", "trip_id", id)
+			u.log.InfoCtx(ctx, "trip not found", "trip_id", id)
 			return domaintrip.Trip{}, err
 		}
-		u.log.Error("trip read failed", "trip_id", id, "err", err)
+		u.log.ErrorCtx(ctx, "trip read failed", "trip_id", id, "err", err)
 		return domaintrip.Trip{}, err
 	}
 	return t, nil

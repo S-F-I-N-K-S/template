@@ -10,10 +10,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	domaintrip "github.com/S-F-I-N-K-S/template/internal/domain/trip"
@@ -30,23 +32,73 @@ func databaseURL() string {
 	return defaultDatabaseURL
 }
 
+var schemaSeq atomic.Uint64
+
 func setupPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
-	pool, err := pgxpool.New(context.Background(), databaseURL())
+	schema := testSchemaName(t)
+
+	admin, err := pgxpool.New(context.Background(), databaseURL())
+	if err != nil {
+		t.Fatalf("connect admin pool: %v", err)
+	}
+	t.Cleanup(admin.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := admin.Ping(ctx); err != nil {
+		t.Fatalf("ping database (поднимите БД: tripgoctl environment start или см. README): %v", err)
+	}
+
+	if _, err := admin.Exec(ctx, `DROP SCHEMA IF EXISTS `+pgx.Identifier{schema}.Sanitize()+` CASCADE`); err != nil {
+		t.Fatalf("drop stale test schema %s: %v", schema, err)
+	}
+	if _, err := admin.Exec(ctx, `CREATE SCHEMA `+pgx.Identifier{schema}.Sanitize()); err != nil {
+		t.Fatalf("create test schema %s: %v", schema, err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := admin.Exec(cleanupCtx, `DROP SCHEMA IF EXISTS `+pgx.Identifier{schema}.Sanitize()+` CASCADE`); err != nil {
+			t.Errorf("drop test schema %s: %v", schema, err)
+		}
+	})
+
+	poolCfg, err := pgxpool.ParseConfig(databaseURL())
+	if err != nil {
+		t.Fatalf("parse database url: %v", err)
+	}
+	searchPath := pgx.Identifier{schema}.Sanitize() + ", public"
+	poolCfg.ConnConfig.RuntimeParams["search_path"] = searchPath
+
+	pool, err := pgxpool.NewWithConfig(context.Background(), poolCfg)
 	if err != nil {
 		t.Fatalf("connect pool: %v", err)
 	}
 	t.Cleanup(pool.Close)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 	if err := pool.Ping(ctx); err != nil {
-		t.Fatalf("ping database (поднимите БД: tripgoctl environment start или см. README): %v", err)
+		t.Fatalf("ping database with test schema: %v", err)
 	}
 
 	applyMigrations(t, ctx, pool)
 	return pool
+}
+
+func testSchemaName(t *testing.T) string {
+	t.Helper()
+	raw := fmt.Sprintf("tripgo_test_%s_%d", t.Name(), schemaSeq.Add(1))
+	var b strings.Builder
+	for _, r := range strings.ToLower(raw) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
 }
 
 func applyMigrations(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
@@ -54,16 +106,6 @@ func applyMigrations(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 
 	_, thisFile, _, _ := runtime.Caller(0)
 	dir := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "migrations")
-
-	drops := []string{
-		`DROP TABLE IF EXISTS trip_status_history`,
-		`DROP TABLE IF EXISTS trips`,
-	}
-	for _, q := range drops {
-		if _, err := pool.Exec(ctx, q); err != nil {
-			t.Fatalf("drop: %v", err)
-		}
-	}
 
 	files, err := filepath.Glob(filepath.Join(dir, "*.sql"))
 	if err != nil || len(files) == 0 {

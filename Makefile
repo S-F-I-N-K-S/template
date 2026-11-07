@@ -25,10 +25,10 @@ run:
 	go run ./cmd/trip-service
 
 fmt:
-	golangci-lint fmt
+	go tool golangci-lint fmt
 
 lint:
-	golangci-lint run ./...
+	go tool golangci-lint run ./...
 
 test:
 	go test -race -count=1 ./...

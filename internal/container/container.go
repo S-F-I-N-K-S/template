@@ -44,7 +44,7 @@ func New(ctx context.Context, cfg *config.Config) (*Container, error) {
 	log := tm.Logger
 	log.Info("starting service", "addr", cfg.HTTPAddr, "version", cfg.ServiceVersion)
 
-	pool, err := postgres.NewPool(ctx, cfg)
+	pool, err := postgres.NewPool(ctx, cfg, tm.TracerProvider, tm.MeterProvider)
 	if err != nil {
 		_ = tm.Shutdown(context.Background())
 		return nil, err

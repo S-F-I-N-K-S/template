@@ -58,10 +58,9 @@ func (s *Server) Ready(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 func NewRouter(d Deps) stdhttp.Handler {
 	r := chi.NewRouter()
 
-	r.Use(middleware.NewRecover(d.Logger))
 	r.Use(middleware.RequestID)
-	r.Use(middleware.NewMetrics(d.Metrics))
 	r.Use(middleware.NewLogger(d.Logger))
+	r.Use(middleware.NewMetrics(d.Metrics))
 
 	handler := api.HandlerWithOptions(&Server{
 		create: d.Create,
@@ -73,12 +72,11 @@ func NewRouter(d Deps) stdhttp.Handler {
 		ErrorHandlerFunc: d.Errs.RequestError,
 	})
 
-	return otelhttp.NewHandler(
+	traced := otelhttp.NewHandler(
 		handler,
 		"",
 		otelhttp.WithTracerProvider(d.Tracer),
-		otelhttp.WithSpanNameFormatter(func(_ string, req *stdhttp.Request) string {
-			return req.Method + " " + req.URL.Path
-		}),
 	)
+
+	return middleware.NewRecover(d.Logger)(traced)
 }

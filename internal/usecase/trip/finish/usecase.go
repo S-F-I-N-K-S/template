@@ -47,16 +47,16 @@ func (u *UseCase) Execute(ctx context.Context, id uuid.UUID) (domaintrip.Trip, e
 	if err != nil {
 		switch {
 		case errors.Is(err, domaintrip.ErrTripNotFound):
-			u.log.Info("trip finish: not found", "trip_id", id)
+			u.log.InfoCtx(ctx, "trip finish: not found", "trip_id", id)
 		case errors.Is(err, domaintrip.ErrTripCompleted):
-			u.log.Info("trip finish conflict: already completed", "trip_id", id)
+			u.log.InfoCtx(ctx, "trip finish conflict: already completed", "trip_id", id)
 		default:
-			u.log.Error("trip finish failed", "trip_id", id, "err", err)
+			u.log.ErrorCtx(ctx, "trip finish failed", "trip_id", id, "err", err)
 		}
 		return domaintrip.Trip{}, fmt.Errorf("finish trip: %w", err)
 	}
 
 	u.m.TripCompleted(ctx)
-	u.log.Info("trip completed", "trip_id", completed.ID, "driver_id", completed.DriverID)
+	u.log.InfoCtx(ctx, "trip completed", "trip_id", completed.ID, "driver_id", completed.DriverID)
 	return completed, nil
 }

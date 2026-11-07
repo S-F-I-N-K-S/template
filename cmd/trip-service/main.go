@@ -12,6 +12,10 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	cfg, err := config.Load()
 	if err != nil {
 		panic(err)
@@ -40,6 +44,7 @@ func main() {
 	defer cancel()
 	if err := c.Shutdown(shutdownCtx); err != nil {
 		fmt.Fprintln(os.Stderr, "shutdown:", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

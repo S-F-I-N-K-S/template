@@ -60,7 +60,13 @@ func NewHTTPInstruments(m metric.Meter) (*HTTPInstruments, error) {
 	return &HTTPInstruments{Duration: duration, Active: active, Requests: requests}, nil
 }
 
-func (h *HTTPInstruments) ActiveAdd(ctx context.Context, v int64) { h.Active.Add(ctx, v) }
+func (h *HTTPInstruments) ActiveAdd(ctx context.Context, v int64, method, route string) {
+	attrs := []attribute.KeyValue{attribute.String("http.request.method", method)}
+	if route != "" {
+		attrs = append(attrs, attribute.String("http.route", route))
+	}
+	h.Active.Add(ctx, v, metric.WithAttributes(attrs...))
+}
 
 func (h *HTTPInstruments) RecordDuration(ctx context.Context, seconds float64, method, route string, status int) {
 	h.Duration.Record(ctx, seconds, metric.WithAttributes(

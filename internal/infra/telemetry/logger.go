@@ -27,7 +27,7 @@ func newLogger(level slog.Level, lp *sdklog.LoggerProvider, mp otelmetric.MeterP
 	}
 
 	return &Logger{
-		out:  newStdoutLogger(level),
+		out:  newStdoutLogger(level).With("service", serviceName),
 		ls:   lp.Logger(serviceName),
 		errs: counter,
 	}

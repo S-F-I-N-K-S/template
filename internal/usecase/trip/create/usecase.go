@@ -36,7 +36,7 @@ func (u *UseCase) Execute(ctx context.Context, in model.CreateTripInput) (domain
 		Now:        u.clk.Now(),
 	})
 	if err != nil {
-		u.log.Info("trip create rejected by validation", "driver_id", in.DriverID, "err", err)
+		u.log.InfoCtx(ctx, "trip create rejected by validation", "driver_id", in.DriverID, "err", err)
 		return domaintrip.Trip{}, err
 	}
 
@@ -49,14 +49,14 @@ func (u *UseCase) Execute(ctx context.Context, in model.CreateTripInput) (domain
 	if err != nil {
 		switch {
 		case errors.Is(err, domaintrip.ErrDriverBusy):
-			u.log.Info("trip create conflict: driver busy", "trip_id", t.ID, "driver_id", t.DriverID)
+			u.log.InfoCtx(ctx, "trip create conflict: driver busy", "trip_id", t.ID, "driver_id", t.DriverID)
 		default:
-			u.log.Error("trip create failed", "trip_id", t.ID, "err", err)
+			u.log.ErrorCtx(ctx, "trip create failed", "trip_id", t.ID, "err", err)
 		}
 		return domaintrip.Trip{}, fmt.Errorf("create trip: %w", err)
 	}
 
 	u.m.TripCreated(ctx)
-	u.log.Info("trip created", "trip_id", t.ID, "driver_id", t.DriverID, "user_id", t.UserID)
+	u.log.InfoCtx(ctx, "trip created", "trip_id", t.ID, "driver_id", t.DriverID, "user_id", t.UserID)
 	return t, nil
 }

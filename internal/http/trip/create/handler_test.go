@@ -1,4 +1,4 @@
-package create
+package create_test
 
 import (
 	"context"
@@ -11,26 +11,17 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/mock/gomock"
 
 	domaintrip "github.com/S-F-I-N-K-S/template/internal/domain/trip"
 	api "github.com/S-F-I-N-K-S/template/internal/generated"
 	"github.com/S-F-I-N-K-S/template/internal/http/domainerror"
+	"github.com/S-F-I-N-K-S/template/internal/http/trip/create"
 	"github.com/S-F-I-N-K-S/template/internal/model"
 )
 
-type fakeUsecase struct {
-	trip domaintrip.Trip
-	err  error
-	in   model.CreateTripInput
-}
-
-func (f *fakeUsecase) Execute(_ context.Context, in model.CreateTripInput) (domaintrip.Trip, error) {
-	f.in = in
-	return f.trip, f.err
-}
-
-func newHandler(uc usecase) http.HandlerFunc {
-	h := New(uc, domainerror.NewWriter(discardLogger{}))
+func newHandler(uc *Mockusecase) http.HandlerFunc {
+	h := create.New(uc, domainerror.NewWriter(discardLogger{}))
 	return func(w http.ResponseWriter, r *http.Request) {
 		h.Handle(w, r, api.CreateTripParams{})
 	}
@@ -65,13 +56,26 @@ func doCreate(t *testing.T, h http.Handler, body string) *httptest.ResponseRecor
 }
 
 func TestHandler_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	uc := NewMockusecase(ctrl)
 	tr := sampleTrip()
-	uc := &fakeUsecase{trip: tr}
+	uc.EXPECT().
+		Execute(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, in model.CreateTripInput) (domaintrip.Trip, error) {
+			if in.Price != 1450 || in.DriverID.String() != "22222222-2222-2222-2222-222222222222" {
+				t.Errorf("usecase input = %+v", in)
+			}
+			return tr, nil
+		})
 
 	rec := doCreate(t, newHandler(uc), validBody)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body)
+	}
+	wantLocation := "/api/v1/trips/" + tr.ID.String()
+	if got := rec.Header().Get("Location"); got != wantLocation {
+		t.Errorf("Location = %q, want %q", got, wantLocation)
 	}
 	var got api.Trip
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
@@ -80,13 +84,12 @@ func TestHandler_Success(t *testing.T) {
 	if got.Id != tr.ID || got.Status != api.TripStatus(domaintrip.StatusActive) {
 		t.Errorf("trip = %+v", got)
 	}
-	if uc.in.Price != 1450 || uc.in.DriverID.String() != "22222222-2222-2222-2222-222222222222" {
-		t.Errorf("usecase input = %+v", uc.in)
-	}
 }
 
 func TestHandler_InvalidBody(t *testing.T) {
-	uc := &fakeUsecase{}
+	ctrl := gomock.NewController(t)
+	uc := NewMockusecase(ctrl)
+	uc.EXPECT().Execute(gomock.Any(), gomock.Any()).Times(0)
 
 	rec := doCreate(t, newHandler(uc), `{bad json`)
 
@@ -102,8 +105,104 @@ func TestHandler_InvalidBody(t *testing.T) {
 	}
 }
 
+func TestHandler_RejectsUnknownFields(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	uc := NewMockusecase(ctrl)
+	uc.EXPECT().Execute(gomock.Any(), gomock.Any()).Times(0)
+
+	body := `{"user_id":"11111111-1111-1111-1111-111111111111",` +
+		`"driver_id":"22222222-2222-2222-2222-222222222222",` +
+		`"start_point":{"latitude":55.75,"longitude":37.62},` +
+		`"end_point":{"latitude":59.94,"longitude":30.31},"price":1450,"extra":"nope"}`
+	rec := doCreate(t, newHandler(uc), body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", rec.Code, rec.Body)
+	}
+}
+
+func TestHandler_RejectsMissingRequiredFields(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "missing price",
+			body: `{"user_id":"11111111-1111-1111-1111-111111111111",` +
+				`"driver_id":"22222222-2222-2222-2222-222222222222",` +
+				`"start_point":{"latitude":55.75,"longitude":37.62},` +
+				`"end_point":{"latitude":59.94,"longitude":30.31}}`,
+		},
+		{
+			name: "missing start_point",
+			body: `{"user_id":"11111111-1111-1111-1111-111111111111",` +
+				`"driver_id":"22222222-2222-2222-2222-222222222222",` +
+				`"end_point":{"latitude":59.94,"longitude":30.31},"price":1450}`,
+		},
+		{
+			name: "missing coordinate inside point",
+			body: `{"user_id":"11111111-1111-1111-1111-111111111111",` +
+				`"driver_id":"22222222-2222-2222-2222-222222222222",` +
+				`"start_point":{"latitude":55.75},` +
+				`"end_point":{"latitude":59.94,"longitude":30.31},"price":1450}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			uc := NewMockusecase(ctrl)
+			uc.EXPECT().Execute(gomock.Any(), gomock.Any()).Times(0)
+
+			rec := doCreate(t, newHandler(uc), tc.body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body = %s", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
+func TestHandler_AcceptsExplicitZeroAsValid(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	uc := NewMockusecase(ctrl)
+	tr := sampleTrip()
+	tr.Price = 0
+	uc.EXPECT().
+		Execute(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, in model.CreateTripInput) (domaintrip.Trip, error) {
+			if in.Price != 0 {
+				t.Errorf("price = %d, want 0", in.Price)
+			}
+			return tr, nil
+		})
+
+	body := `{"user_id":"11111111-1111-1111-1111-111111111111",` +
+		`"driver_id":"22222222-2222-2222-2222-222222222222",` +
+		`"start_point":{"latitude":0,"longitude":0},` +
+		`"end_point":{"latitude":0,"longitude":0},"price":0}`
+	rec := doCreate(t, newHandler(uc), body)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body)
+	}
+}
+
+func TestHandler_RejectsTrailingContent(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	uc := NewMockusecase(ctrl)
+	uc.EXPECT().Execute(gomock.Any(), gomock.Any()).Times(0)
+
+	rec := doCreate(t, newHandler(uc), validBody+validBody)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", rec.Code, rec.Body)
+	}
+}
+
 func TestHandler_DriverBusy(t *testing.T) {
-	uc := &fakeUsecase{err: domaintrip.ErrDriverBusy}
+	ctrl := gomock.NewController(t)
+	uc := NewMockusecase(ctrl)
+	uc.EXPECT().Execute(gomock.Any(), gomock.Any()).Return(domaintrip.Trip{}, domaintrip.ErrDriverBusy)
 
 	rec := doCreate(t, newHandler(uc), validBody)
 
@@ -120,7 +219,9 @@ func TestHandler_DriverBusy(t *testing.T) {
 }
 
 func TestHandler_InternalErrorNoDetails(t *testing.T) {
-	uc := &fakeUsecase{err: &internalErr{}}
+	ctrl := gomock.NewController(t)
+	uc := NewMockusecase(ctrl)
+	uc.EXPECT().Execute(gomock.Any(), gomock.Any()).Return(domaintrip.Trip{}, &internalErr{})
 
 	rec := doCreate(t, newHandler(uc), validBody)
 

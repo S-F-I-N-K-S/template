@@ -69,7 +69,7 @@ func TestExecute_Success(t *testing.T) {
 	d.trips.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
 	d.history.EXPECT().AppendHistory(gomock.Any(), id, "", string(domaintrip.StatusActive), "trip created").Return(nil)
 	d.metrics.EXPECT().TripCreated(gomock.Any())
-	d.log.EXPECT().Info("trip created", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+	d.log.EXPECT().InfoCtx(gomock.Any(), "trip created", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 	uc := New(d.tx, d.trips, d.history, d.clock, d.gen, d.metrics, d.log)
 	tr, err := uc.Execute(context.Background(), in)
@@ -90,7 +90,7 @@ func TestExecute_ValidationRejected(t *testing.T) {
 
 	d.gen.EXPECT().New().Return(uuid.New())
 	d.clock.EXPECT().Now().Return(now)
-	d.log.EXPECT().Info("trip create rejected by validation", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+	d.log.EXPECT().InfoCtx(gomock.Any(), "trip create rejected by validation", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 	uc := New(d.tx, d.trips, d.history, d.clock, d.gen, d.metrics, d.log)
 	_, err := uc.Execute(context.Background(), in)
@@ -108,7 +108,7 @@ func TestExecute_DriverBusy(t *testing.T) {
 	d.clock.EXPECT().Now().Return(now)
 	passThrough(d.tx)
 	d.trips.EXPECT().Save(gomock.Any(), gomock.Any()).Return(domaintrip.ErrDriverBusy)
-	d.log.EXPECT().Info("trip create conflict: driver busy", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+	d.log.EXPECT().InfoCtx(gomock.Any(), "trip create conflict: driver busy", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 	uc := New(d.tx, d.trips, d.history, d.clock, d.gen, d.metrics, d.log)
 	_, err := uc.Execute(context.Background(), input())
@@ -126,7 +126,7 @@ func TestExecute_RepoError(t *testing.T) {
 	d.clock.EXPECT().Now().Return(now)
 	passThrough(d.tx)
 	d.trips.EXPECT().Save(gomock.Any(), gomock.Any()).Return(dbErr)
-	d.log.EXPECT().Error("trip create failed", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+	d.log.EXPECT().ErrorCtx(gomock.Any(), "trip create failed", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 	uc := New(d.tx, d.trips, d.history, d.clock, d.gen, d.metrics, d.log)
 	_, err := uc.Execute(context.Background(), input())

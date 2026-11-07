@@ -47,7 +47,7 @@ func TestExecute_NotFound(t *testing.T) {
 	id := uuid.New()
 
 	reader.EXPECT().GetByID(gomock.Any(), id).Return(domaintrip.Trip{}, domaintrip.ErrTripNotFound)
-	log.EXPECT().Info("trip not found", gomock.Any(), gomock.Any())
+	log.EXPECT().InfoCtx(gomock.Any(), "trip not found", gomock.Any(), gomock.Any())
 
 	uc := New(reader, log)
 	_, err := uc.Execute(context.Background(), id)
@@ -66,7 +66,7 @@ func TestExecute_InternalError(t *testing.T) {
 	dbErr := errors.New("db down")
 
 	reader.EXPECT().GetByID(gomock.Any(), id).Return(domaintrip.Trip{}, dbErr)
-	log.EXPECT().Error("trip read failed", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+	log.EXPECT().ErrorCtx(gomock.Any(), "trip read failed", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
 
 	uc := New(reader, log)
 	_, err := uc.Execute(context.Background(), id)

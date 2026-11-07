@@ -89,7 +89,7 @@ linters:
       field-writes-are-uses: false
 
   exclusions:
-    generated: lax
+    generated: strict
     presets:
       - comments
       - common-false-positives
@@ -121,7 +121,7 @@ formatters:
         clothe-returns: true
 
   exclusions:
-    generated: lax
+    generated: strict
     paths:
       - third_party$
       - builtin$

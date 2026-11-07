@@ -118,10 +118,17 @@ func (r *Repository) Finish(ctx context.Context, id uuid.UUID, finishedAt time.T
 		return fmt.Errorf("finish trip: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		if _, err := r.GetByID(ctx, id); errors.Is(err, domaintrip.ErrTripNotFound) {
+		existing, getErr := r.GetByID(ctx, id)
+		switch {
+		case errors.Is(getErr, domaintrip.ErrTripNotFound):
 			return domaintrip.ErrTripNotFound
+		case getErr != nil:
+			return fmt.Errorf("finish trip: confirm current state: %w", getErr)
+		case existing.Status == domaintrip.StatusCompleted:
+			return domaintrip.ErrTripCompleted
+		default:
+			return fmt.Errorf("finish trip: update matched no rows but trip %s is %q", id, existing.Status)
 		}
-		return domaintrip.ErrTripCompleted
 	}
 	return nil
 }

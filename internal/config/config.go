@@ -55,18 +55,51 @@ func Load() (*Config, error) {
 	cfg.DatabaseQueryTimeout = mustDuration("DATABASE_QUERY_TIMEOUT", &errs)
 	cfg.DatabaseMaxConnLifetime = mustDuration("DATABASE_MAX_CONN_LIFETIME", &errs)
 
-	// Сам SDK читает OTEL_* из окружения. Здесь только fail-fast проверка:
-	// адрес не задан — ошибка конфига; коллектор недоступен — штатная работа.
 	cfg.OTLPEndpoint = mustString("OTEL_EXPORTER_OTLP_ENDPOINT", &errs)
 	cfg.OTLPProtocol = getEnvDefault("OTEL_EXPORTER_OTLP_PROTOCOL", protocolHTTPProtobuf)
 	if cfg.OTLPProtocol != protocolHTTPProtobuf {
 		errs = append(errs, fmt.Sprintf("OTEL_EXPORTER_OTLP_PROTOCOL: unsupported %q, only %q", cfg.OTLPProtocol, protocolHTTPProtobuf))
 	}
 
+	validateRanges(cfg, &errs)
+
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("invalid config: %v", errs)
 	}
 	return cfg, nil
+}
+
+func validateRanges(cfg *Config, errs *[]string) {
+	positiveDurations := []struct {
+		name string
+		v    time.Duration
+	}{
+		{"SHUTDOWN_TIMEOUT", cfg.ShutdownTimeout},
+		{"HTTP_READ_TIMEOUT", cfg.HTTPReadTimeout},
+		{"HTTP_READ_HEADER_TIMEOUT", cfg.HTTPReadHeaderTimeout},
+		{"HTTP_WRITE_TIMEOUT", cfg.HTTPWriteTimeout},
+		{"HTTP_IDLE_TIMEOUT", cfg.HTTPIdleTimeout},
+		{"DATABASE_CONNECT_TIMEOUT", cfg.DatabaseConnectTimeout},
+		{"DATABASE_QUERY_TIMEOUT", cfg.DatabaseQueryTimeout},
+		{"DATABASE_MAX_CONN_LIFETIME", cfg.DatabaseMaxConnLifetime},
+	}
+	for _, d := range positiveDurations {
+		if d.v <= 0 {
+			*errs = append(*errs, fmt.Sprintf("%s: must be > 0, got %s", d.name, d.v))
+		}
+	}
+
+	if cfg.DatabaseMaxConns <= 0 {
+		*errs = append(*errs, fmt.Sprintf("DATABASE_MAX_CONNS: must be > 0, got %d", cfg.DatabaseMaxConns))
+	}
+	switch {
+	case cfg.DatabaseMinConns < 0:
+		*errs = append(*errs, fmt.Sprintf("DATABASE_MIN_CONNS: must be >= 0, got %d", cfg.DatabaseMinConns))
+	case cfg.DatabaseMaxConns > 0 && cfg.DatabaseMinConns > cfg.DatabaseMaxConns:
+		*errs = append(*errs, fmt.Sprintf(
+			"DATABASE_MIN_CONNS: must be <= DATABASE_MAX_CONNS (%d), got %d",
+			cfg.DatabaseMaxConns, cfg.DatabaseMinConns))
+	}
 }
 
 func getEnvDefault(key, def string) string {
