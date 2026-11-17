@@ -10,25 +10,34 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/S-F-I-N-K-S/template/internal/config"
+	pushgw "github.com/S-F-I-N-K-S/template/internal/gateway/push"
 	httpapi "github.com/S-F-I-N-K-S/template/internal/http"
 	"github.com/S-F-I-N-K-S/template/internal/http/domainerror"
 	"github.com/S-F-I-N-K-S/template/internal/http/health"
 	"github.com/S-F-I-N-K-S/template/internal/http/trip/create"
 	chandlers "github.com/S-F-I-N-K-S/template/internal/http/trip/finish"
 	gethandler "github.com/S-F-I-N-K-S/template/internal/http/trip/get"
+	positionlisthandler "github.com/S-F-I-N-K-S/template/internal/http/trip/position/list"
+	positionsavehandler "github.com/S-F-I-N-K-S/template/internal/http/trip/position/save"
 	"github.com/S-F-I-N-K-S/template/internal/infra/postgres"
 	"github.com/S-F-I-N-K-S/template/internal/infra/telemetry"
 	"github.com/S-F-I-N-K-S/template/internal/infra/transaction"
+	repoposition "github.com/S-F-I-N-K-S/template/internal/repository/position"
 	repostrip "github.com/S-F-I-N-K-S/template/internal/repository/trip"
 	ucCreate "github.com/S-F-I-N-K-S/template/internal/usecase/trip/create"
 	ucFinish "github.com/S-F-I-N-K-S/template/internal/usecase/trip/finish"
 	ucGet "github.com/S-F-I-N-K-S/template/internal/usecase/trip/get"
+	ucPositionList "github.com/S-F-I-N-K-S/template/internal/usecase/trip/position/list"
+	ucPositionSave "github.com/S-F-I-N-K-S/template/internal/usecase/trip/position/save"
+	workerpositions "github.com/S-F-I-N-K-S/template/internal/worker/positions"
 )
 
 type Container struct {
-	server    *stdhttp.Server
-	pool      *pgxpool.Pool
-	telemetry *telemetry.Telemetry
+	server     *stdhttp.Server
+	pool       *pgxpool.Pool
+	telemetry  *telemetry.Telemetry
+	workers    *workerpositions.Pool
+	pushClient *pushgw.Gateway
 }
 
 func New(ctx context.Context, cfg *config.Config) (*Container, error) {
@@ -53,6 +62,7 @@ func New(ctx context.Context, cfg *config.Config) (*Container, error) {
 	txm := transaction.New(pool)
 	trips := repostrip.NewRepository(pool, cfg.DatabaseQueryTimeout)
 	history := repostrip.NewHistoryRepository(pool, cfg.DatabaseQueryTimeout)
+	positionsRepo := repoposition.NewRepository(pool, cfg.DatabaseQueryTimeout)
 
 	meter := tm.MeterProvider.Meter("tripgo")
 	tripMetrics, err := telemetry.NewTripMetrics(meter)
@@ -67,23 +77,59 @@ func New(ctx context.Context, cfg *config.Config) (*Container, error) {
 		pool.Close()
 		return nil, err
 	}
+	positionMetrics, err := telemetry.NewPositionMetrics(meter)
+	if err != nil {
+		_ = tm.Shutdown(context.Background())
+		pool.Close()
+		return nil, err
+	}
+	workerMetrics, err := telemetry.NewWorkerMetrics(meter)
+	if err != nil {
+		_ = tm.Shutdown(context.Background())
+		pool.Close()
+		return nil, err
+	}
 
 	errs := domainerror.NewWriter(log)
+
+	pushClient := pushgw.New(cfg.PushHTTPURL, cfg.PushRequestTimeout)
+
+	workerPool := workerpositions.New(
+		workerpositions.Config{
+			CheckInterval:  cfg.PositionCheckInterval,
+			StaleAfter:     cfg.PositionStaleAfter,
+			Workers:        cfg.PositionWorkers,
+			QueueSize:      cfg.PositionQueueSize,
+			RequestTimeout: cfg.PushRequestTimeout,
+		},
+		staleTripLister{trips: trips},
+		pushClient,
+		workerMetrics,
+		log,
+		systemClock{},
+		workerpositions.NewTicker(cfg.PositionCheckInterval),
+	)
 
 	createUC := ucCreate.New(txm, trips, history, systemClock{}, uuidGen{}, tripMetrics, log)
 	getUC := ucGet.New(trips, log)
 	finishUC := ucFinish.New(txm, trips, history, systemClock{}, tripMetrics, log)
+	savePositionUC := ucPositionSave.New(txm, trips, positionsRepo, workerPool, systemClock{}, positionMetrics, log)
+	listPositionUC := ucPositionList.New(trips, positionsRepo, log)
 
 	router := httpapi.NewRouter(httpapi.Deps{
-		Create:  create.New(createUC, errs),
-		Get:     gethandler.New(getUC, errs),
-		Finish:  chandlers.New(finishUC, errs),
-		Health:  health.New(poolPinger{pool: pool}),
-		Errs:    errs,
-		Logger:  log,
-		Metrics: httpMetrics,
-		Tracer:  tm.TracerProvider,
+		Create:       create.New(createUC, errs),
+		Get:          gethandler.New(getUC, errs),
+		Finish:       chandlers.New(finishUC, errs),
+		SavePosition: positionsavehandler.New(savePositionUC, errs),
+		ListPosition: positionlisthandler.New(listPositionUC, errs),
+		Health:       health.New(poolPinger{pool: pool}),
+		Errs:         errs,
+		Logger:       log,
+		Metrics:      httpMetrics,
+		Tracer:       tm.TracerProvider,
 	})
+
+	workerPool.Start()
 
 	return &Container{
 		server: &stdhttp.Server{
@@ -94,8 +140,10 @@ func New(ctx context.Context, cfg *config.Config) (*Container, error) {
 			WriteTimeout:      cfg.HTTPWriteTimeout,
 			IdleTimeout:       cfg.HTTPIdleTimeout,
 		},
-		pool:      pool,
-		telemetry: tm,
+		pool:       pool,
+		telemetry:  tm,
+		workers:    workerPool,
+		pushClient: pushClient,
 	}, nil
 }
 
@@ -111,6 +159,10 @@ func (c *Container) Shutdown(ctx context.Context) error {
 	if err := c.server.Shutdown(ctx); err != nil {
 		errs = append(errs, err)
 	}
+	if err := c.workers.Stop(ctx); err != nil {
+		errs = append(errs, err)
+	}
+	c.pushClient.Close()
 	c.pool.Close()
 	if err := c.telemetry.Shutdown(ctx); err != nil {
 		errs = append(errs, err)
@@ -133,3 +185,21 @@ type poolPinger struct {
 }
 
 func (p poolPinger) Ping(ctx context.Context) error { return p.pool.Ping(ctx) }
+
+type staleTripLister struct {
+	trips *repostrip.Repository
+}
+
+func (s staleTripLister) ListStaleActive(
+	ctx context.Context, staleAfter time.Duration, now time.Time,
+) ([]workerpositions.StaleTrip, error) {
+	rows, err := s.trips.ListStaleActive(ctx, staleAfter, now)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]workerpositions.StaleTrip, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, workerpositions.StaleTrip{TripID: r.TripID, DriverID: r.DriverID})
+	}
+	return out, nil
+}

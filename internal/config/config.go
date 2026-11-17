@@ -30,6 +30,13 @@ type Config struct {
 	ServiceVersion string
 	OTLPEndpoint   string
 	OTLPProtocol   string
+
+	PositionCheckInterval time.Duration
+	PositionStaleAfter    time.Duration
+	PositionWorkers       int
+	PositionQueueSize     int
+	PushHTTPURL           string
+	PushRequestTimeout    time.Duration
 }
 
 func Load() (*Config, error) {
@@ -61,6 +68,13 @@ func Load() (*Config, error) {
 		errs = append(errs, fmt.Sprintf("OTEL_EXPORTER_OTLP_PROTOCOL: unsupported %q, only %q", cfg.OTLPProtocol, protocolHTTPProtobuf))
 	}
 
+	cfg.PositionCheckInterval = getDurationDefault("POSITION_CHECK_INTERVAL", 30*time.Second, &errs)
+	cfg.PositionStaleAfter = getDurationDefault("POSITION_STALE_AFTER", 60*time.Second, &errs)
+	cfg.PositionWorkers = getIntDefault("POSITION_WORKERS", 4, &errs)
+	cfg.PositionQueueSize = getIntDefault("POSITION_QUEUE_SIZE", 100, &errs)
+	cfg.PushHTTPURL = mustString("PUSH_HTTP_URL", &errs)
+	cfg.PushRequestTimeout = getDurationDefault("PUSH_REQUEST_TIMEOUT", time.Second, &errs)
+
 	validateRanges(cfg, &errs)
 
 	if len(errs) > 0 {
@@ -82,11 +96,21 @@ func validateRanges(cfg *Config, errs *[]string) {
 		{"DATABASE_CONNECT_TIMEOUT", cfg.DatabaseConnectTimeout},
 		{"DATABASE_QUERY_TIMEOUT", cfg.DatabaseQueryTimeout},
 		{"DATABASE_MAX_CONN_LIFETIME", cfg.DatabaseMaxConnLifetime},
+		{"POSITION_CHECK_INTERVAL", cfg.PositionCheckInterval},
+		{"POSITION_STALE_AFTER", cfg.PositionStaleAfter},
+		{"PUSH_REQUEST_TIMEOUT", cfg.PushRequestTimeout},
 	}
 	for _, d := range positiveDurations {
 		if d.v <= 0 {
 			*errs = append(*errs, fmt.Sprintf("%s: must be > 0, got %s", d.name, d.v))
 		}
+	}
+
+	if cfg.PositionWorkers <= 0 {
+		*errs = append(*errs, fmt.Sprintf("POSITION_WORKERS: must be > 0, got %d", cfg.PositionWorkers))
+	}
+	if cfg.PositionQueueSize <= 0 {
+		*errs = append(*errs, fmt.Sprintf("POSITION_QUEUE_SIZE: must be > 0, got %d", cfg.PositionQueueSize))
 	}
 
 	if cfg.DatabaseMaxConns <= 0 {
@@ -129,6 +153,19 @@ func getDurationDefault(key string, def time.Duration, errs *[]string) time.Dura
 		return def
 	}
 	return d
+}
+
+func getIntDefault(key string, def int, errs *[]string) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		*errs = append(*errs, fmt.Sprintf("%s: invalid int %q: %v", key, v, err))
+		return def
+	}
+	return n
 }
 
 func mustString(key string, errs *[]string) string {
