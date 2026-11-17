@@ -36,19 +36,6 @@ Go». Принимает HTTP-запросы на создание, получе
 
    Сервис слушает `HTTP_ADDR` (по умолчанию `:8080`).
 
-4. Проверить:
-
-```bash
-   curl -sS localhost:8080/health
-   curl -sS localhost:8080/ready
-
-   curl -sS -X POST localhost:8080/api/v1/trips \
-     -H 'content-type: application/json' \
-     -d '{"user_id":"5cb72c04-7650-45c9-a79b-bcdba0631e0c",
-          "driver_id":"8860b315-ec86-42eb-a17c-7c163d721ff5",
-          "start_point":{"latitude":59.9398,"longitude":30.3146},
-          "end_point":{"latitude":59.9290,"longitude":30.3626},
-          "price":1450}' | jq
 ```
 
 ## Makefile
@@ -90,12 +77,6 @@ Go». Принимает HTTP-запросы на создание, получе
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | нет | `http/protobuf` | протокол экспорта; поддержан только `http/protobuf` |
 | `OTEL_RESOURCE_ATTRIBUTES` | нет | — | дополнительные атрибуты ресурса (`service.namespace`, `deployment.environment`) |
 | `OTEL_TRACES_SAMPLER` | нет | — | сэмплер трейсов (читает SDK) |
-| `POSITION_CHECK_INTERVAL` | нет | `30s` | период тикера сканера устаревших поездок |
-| `POSITION_STALE_AFTER` | нет | `60s` | после какого простоя без координат поездка считается устаревшей |
-| `POSITION_WORKERS` | нет | `4` | число воркеров, опрашивающих Push Service |
-| `POSITION_QUEUE_SIZE` | нет | `100` | размер буфера очереди опроса |
-| `PUSH_HTTP_URL` | да | — | адрес Push Service, подставляется `tripgoctl` |
-| `PUSH_REQUEST_TIMEOUT` | нет | `1s` | таймаут одного запроса к Push Service (без ретраев) |
 
 ## Решения
 
@@ -163,127 +144,6 @@ WHERE id = $2 AND status = 'active';
 (PostgreSQL держит блокировку строки и переоценивает `WHERE` после её
 получения); второй видит 0 затронутых строк и получает `409`. `finished_at`
 не перезаписывается.
-
-### Сохранение координаты: атомарность и устойчивость к опозданиям
-
-`AdvanceLastPositionAt` (`internal/repository/trip/positions.go`) и
-`Repository.Save` (`internal/repository/position`) выполняются одним `Do`
-(usecase `internal/usecase/trip/position/save`):
-
-```sql
-UPDATE trips
-SET last_position_at = CASE
-        WHEN last_position_at IS NULL OR last_position_at < $2 THEN $2
-        ELSE last_position_at
-    END,
-    updated_at = now()
-WHERE id = $1 AND status = 'active';
-```
-
-Это условный `UPDATE` того же вида, что и у `Finish`: `WHERE status = 'active'`
-за один запрос отличает «поездки нет» от «поездка завершена» (0 затронутых
-строк → дополнительное чтение по `id`, как в `Finish`, различает `404` и
-`409`), а сравнение времени — `CASE WHEN ... < $2` — сделано в самом запросе,
-а не чтением значения в Go с последующей записью. Поэтому опоздавшая
-координата, пришедшая позже уже сохранённой свежей, не может «состарить»
-поездку: проверено интеграционным тестом
-(`TestRepository_AdvanceLastPositionAt_IgnoresOlderTimestamp`). `UPDATE`
-удерживает блокировку строки `trips` до конца транзакции, поэтому
-конкурентный `Finish` той же поездки ждёт её коммита — `INSERT` в
-`trip_positions`, который выполняется следом в той же транзакции, не может
-попасть в уже завершённую поездку (а при откате транзакции не остаётся и
-сама координата — `TestSavePosition_RolledBackWhenTripCompleted`).
-
-### Опрос устаревших поездок (сканер + worker pool)
-
-`internal/worker/positions.Pool` — отдельный компонент с собственным
-жизненным циклом (`Start`/`Stop`), без зависимости от `pgx`/`chi`/HTTP:
-интерфейсы `lister` (выборка устаревших поездок) и `pusher` (гейтвей в Push
-Service) объявлены в его `contract.go`, конкретные реализации подставляет
-`container.go`.
-
-```
-        ┌──────────┐ тик раз в POSITION_CHECK_INTERVAL
-        │  сканер   │─────────────────────────────┐
-        └────┬─────┘                              │
-             │ ListStaleActive(StaleAfter, now)    │
-             ▼                                     ▼
-   ┌───────────────────────┐             ┌──────────────────┐
-   │ trips (частичный      │             │  dedup-структура   │
-   │ индекс по             │             │  (map + mutex):     │
-   │ COALESCE(last_        │             │  кто сейчас в       │
-   │ position_at,          │             │  очереди/обработке  │
-   │ started_at))          │             └─────────┬──────────┘
-   └───────────────────────┘                       │ не дубликат?
-                                                     ▼
-                                          ┌─────────────────────┐
-                                          │ очередь (буфер.      │
-                                          │ канал, QueueSize)     │
-                                          └──────────┬────────────┘
-                                                     │
-                                     POSITION_WORKERS воркеров
-                                                     ▼
-                                          ┌─────────────────────┐
-                                          │ gateway/push →        │
-                                          │ Push Service (HTTP,   │
-                                          │ 1 попытка, свой       │
-                                          │ timeout)               │
-                                          └─────────────────────┘
-```
-
-Ключевые решения:
-
-- **Выборка.** `SELECT ... WHERE status = 'active' AND COALESCE(last_position_at,
-  started_at) < now() - StaleAfter ORDER BY since ASC` — покрыта частичным
-  индексом `trips_active_stale_since_idx` (миграция `00003`, по тому же
-  выражению `COALESCE(...)`, `WHERE status = 'active'`), так что фильтр и
-  сортировка используют один index scan, а завершённые поездки индекс вообще
-  не видит. Первыми возвращаются поездки, которые молчат дольше всех.
-  Проверено `EXPLAIN (ANALYZE, BUFFERS)` на тестовых данных — план содержит
-  `Bitmap Index Scan on trips_active_stale_since_idx`.
-- **Очередь и дедупликация.** Горутины на поездку не создаются: одна
-  горутина-сканер раскладывает задачи по буферизованному каналу
-  (`POSITION_QUEUE_SIZE`), фиксированное число воркеров (`POSITION_WORKERS`)
-  его разбирает. `map[uuid.UUID]struct{}` под мьютексом хранит, какие
-  поездки сейчас в очереди или в обработке — повторный тик по той же
-  поездке, пока предыдущая попытка не завершилась, даёт `duplicate`, а не
-  вторую задачу в канале (`tripgo.stale_checks{result=duplicate}`). Если
-  канал переполнен, задача не теряется — её просто отбрасывает текущий тик
-  (`result=dropped`, уровень `Warn`): `last_position_at` не менялся, и
-  поездка снова попадёт в выборку на следующем тике.
-- **Пауза между запросами по одной поездке** — это и есть
-  `POSITION_CHECK_INTERVAL`: отдельного `sleep` после отправки нет, период
-  тикера сам ограничивает частоту повторных попыток по одной и той же
-  поездке (следующий тик её просто не возьмёт, пока предыдущая обработка не
-  освободила запись в dedup-структуре).
-- **Отмена.** Пришедшая координата (`usecase/trip/position/save`) вызывает
-  `Pool.Cancel(tripID)` — поездка убирается из dedup-структуры. Если задача
-  уже лежит в канале, воркер при обработке видит, что поездки там больше
-  нет, и в Push Service не идёт (`TestProcess_CancelledBeforeDequeue_SkipsPush`,
-  белый ящик без гонки с реальным воркером).
-- **Тикер за интерфейсом.** `positions.Ticker` — обёртка над `time.Ticker` в
-  проде, управляемая `fakeTicker` в тестах (`pool_test.go`): тесты шлют тики
-  вручную, не дожидаясь реального `POSITION_CHECK_INTERVAL`.
-- **Остановка** (`Pool.Stop`, вызывается из `Container.Shutdown` между
-  остановкой HTTP-сервера и закрытием пула БД): сначала останавливается
-  сканер (новые задачи не появляются), затем закрывается канал очереди —
-  воркеры дорабатывают то, что уже в буфере, в пределах `ctx`
-  (`SHUTDOWN_TIMEOUT), и только потом закрываются HTTP-клиент гейтвея
-  (`pushClient.Close()`) и пул БД. Проверено `TestPool_StopDrainsBufferedQueueWithinDeadline`
-  и `TestMain`/`goleak.VerifyTestMain` — ни один тест пакета не оставляет
-  после себя горутины.
-- **Гейтвей в Push Service** (`internal/gateway/push`) — HTTP, одной
-  попыткой, без ретраев (ретраи — в следующей работе), со своим
-  `http.Client` и таймаутом `PUSH_REQUEST_TIMEOUT`; 5xx/429 превращаются в
-  `ErrUnavailable`, остальные 4xx — в `ErrRejected`, транспортные ошибки и
-  таймаут — тоже в `ErrUnavailable`.
-- **Упрощение, оставленное сознательно:** сканер складывает в очередь *весь*
-  результат выборки за один тик, без пакетной обработки (батчами) и без
-  приоритизации внутри самой очереди сверх сортировки на уровне SQL. При
-  текущих `POSITION_WORKERS`/`POSITION_QUEUE_SIZE` по умолчанию это
-  достаточно; батчинг добавил бы сложности больше, чем пользы на этом
-  масштабе.
-
 ## Архитектура
 
 ### Слои и направление зависимостей
@@ -381,12 +241,8 @@ usecase-пакета используются в `*_test.go` рядом (`mocks_
 
 ## Тесты и линтер
 
-- `make test` — unit-тесты (`domain`, `usecase`, хендлеры, `domainerror`,
-  `middleware`, `gateway/push`, `worker/positions`). Пакет `worker/positions`
-  запускается и с `-race`: там же `goleak.VerifyTestMain` проверяет, что
-  тесты не оставляют после себя горутины сканера/воркеров.
+- `make test` — unit-тесты (`domain`, `usecase`, хендлеры, `domainerror`, middleware).
 - `make test-integration` — репозиторий и менеджер транзакций на реальной БД
-  (перед запуском: `make migrate`, `.env` от `tripgoctl`); включает
-  `AdvanceLastPositionAt`/`ListStaleActive`/`EXPLAIN`-сценарии из раздела про
-  опрос устаревших поездок выше.
+  (перед запуском: `make migrate`, `.env` от `tripgoctl`).
 - `make lint` — golangci-lint v2, конфиг `.golangci.yml` (включает правила слоёв `depguard`).
+
