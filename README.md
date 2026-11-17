@@ -258,3 +258,4 @@ usecase-пакета используются в `*_test.go` рядом (`mocks_
 - `make test-integration` — репозиторий и менеджер транзакций на реальной БД
   (перед запуском: `make migrate`, `.env` от `tripgoctl`).
 - `make lint` — golangci-lint v2, конфиг `.golangci.yml` (включает правила слоёв `depguard`).
+
