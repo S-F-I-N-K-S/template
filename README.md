@@ -111,9 +111,6 @@ seq 20 | xargs -P20 -I{} curl -s -o /dev/null -w '%{http_code}\n' \
   -d @trip.json | sort | uniq -c
 ```
 
-Готовность: `curl -i localhost:8080/ready` отдаёт `200`, а после остановки
-PostgreSQL — `503`. Тесты: `make test`.
-
 ## Принятые решения
 
 ### Уровень изоляции транзакций: Read Committed
