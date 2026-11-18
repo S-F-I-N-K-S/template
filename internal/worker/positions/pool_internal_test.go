@@ -45,7 +45,6 @@ func (p *stubPusher) callCount() int {
 type stubMetrics struct {
 	mu         sync.Mutex
 	staleCheck []string
-	queueSize  int64
 }
 
 func (m *stubMetrics) StaleCheck(_ context.Context, result string) {
@@ -53,11 +52,8 @@ func (m *stubMetrics) StaleCheck(_ context.Context, result string) {
 	defer m.mu.Unlock()
 	m.staleCheck = append(m.staleCheck, result)
 }
-func (m *stubMetrics) QueueSizeAdd(_ context.Context, delta int64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.queueSize += delta
-}
+
+func (*stubMetrics) QueueSizeAdd(context.Context, int64)                    {}
 func (*stubMetrics) WorkersActiveAdd(context.Context, int64)                {}
 func (*stubMetrics) PositionRequestResult(context.Context, string, float64) {}
 
@@ -93,7 +89,6 @@ func TestEnqueue_Dedup(t *testing.T) {
 	tripID, driverID := uuid.New(), uuid.New()
 
 	p.enqueue(context.Background(), StaleTrip{TripID: tripID, DriverID: driverID})
-
 	p.enqueue(context.Background(), StaleTrip{TripID: tripID, DriverID: driverID})
 
 	if got := m.results(); len(got) != 2 || got[0] != resultQueued || got[1] != resultDuplicate {
@@ -115,7 +110,6 @@ func TestEnqueue_QueueFull_Dropped(t *testing.T) {
 	if got := m.results(); len(got) != 2 || got[0] != resultQueued || got[1] != resultDropped {
 		t.Errorf("StaleCheck results = %v, want [queued dropped]", got)
 	}
-
 	if _, stillMarked := p.queued[b]; stillMarked {
 		t.Error("dropped trip should not stay marked as queued")
 	}
@@ -127,6 +121,7 @@ func TestProcess_CancelledBeforeDequeue_SkipsPush(t *testing.T) {
 	tripID, driverID := uuid.New(), uuid.New()
 
 	p.enqueue(context.Background(), StaleTrip{TripID: tripID, DriverID: driverID})
+	// Координата пришла раньше, чем воркер успел взять задачу в обработку.
 	p.Cancel(tripID)
 
 	p.process(context.Background(), task{tripID: tripID, driverID: driverID})

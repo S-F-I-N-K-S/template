@@ -31,7 +31,7 @@ func (r *Repository) AdvanceLastPositionAt(ctx context.Context, tripID uuid.UUID
 			recordedAt, recordedAt,
 		)).
 		Set("updated_at", squirrel.Expr("now()")).
-		Where(squirrel.Eq{"id": tripID, "status": string(domaintrip.StatusActive)}).
+		Where(squirrel.Eq{"id": tripID, columnStatus: string(domaintrip.StatusActive)}).
 		ToSql()
 	if err != nil {
 		return fmt.Errorf("build advance last_position_at query: %w", err)
@@ -68,7 +68,7 @@ func (r *Repository) ListStaleActive(ctx context.Context, staleAfter time.Durati
 	query, args, err := sq.Select("id", "driver_id", "COALESCE(last_position_at, started_at) AS since").
 		From("trips").
 		Where(squirrel.And{
-			squirrel.Eq{"status": string(domaintrip.StatusActive)},
+			squirrel.Eq{columnStatus: string(domaintrip.StatusActive)},
 			squirrel.Expr("COALESCE(last_position_at, started_at) < ?", threshold),
 		}).
 		OrderBy("since ASC").

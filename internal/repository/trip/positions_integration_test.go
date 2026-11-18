@@ -118,12 +118,14 @@ func TestRepository_ListStaleActive(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
+	// Молчит дольше всех: started_at 10 минут назад, координат не было.
 	oldest := newTrip(uuid.New())
 	oldest.StartedAt = now.Add(-10 * time.Minute)
 	if err := repo.Save(ctx, oldest); err != nil {
 		t.Fatalf("save oldest: %v", err)
 	}
 
+	// Молчит 5 минут (была координата 5 минут назад).
 	middle := newTrip(uuid.New())
 	middle.StartedAt = now.Add(-20 * time.Minute)
 	if err := repo.Save(ctx, middle); err != nil {
@@ -133,6 +135,7 @@ func TestRepository_ListStaleActive(t *testing.T) {
 		t.Fatalf("advance middle: %v", err)
 	}
 
+	// Свежая: координата была только что — не должна попасть в выборку.
 	fresh := newTrip(uuid.New())
 	if err := repo.Save(ctx, fresh); err != nil {
 		t.Fatalf("save fresh: %v", err)
@@ -141,6 +144,8 @@ func TestRepository_ListStaleActive(t *testing.T) {
 		t.Fatalf("advance fresh: %v", err)
 	}
 
+	// Завершённая поездка молчит дольше всех, но активной уже не является —
+	// не должна попасть в выборку, несмотря на то что COALESCE(...) < threshold.
 	completed := newTrip(uuid.New())
 	completed.StartedAt = now.Add(-time.Hour)
 	if err := repo.Save(ctx, completed); err != nil {
@@ -155,7 +160,7 @@ func TestRepository_ListStaleActive(t *testing.T) {
 		t.Fatalf("ListStaleActive: %v", err)
 	}
 
-	var got []uuid.UUID
+	got := make([]uuid.UUID, 0, len(stale))
 	for _, s := range stale {
 		got = append(got, s.TripID)
 	}
