@@ -27,7 +27,7 @@ func TestRequestPosition_Accepted(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	g := push.New(srv.URL, time.Second)
+	g := push.New(srv.URL, time.Second, nil)
 	driverID, tripID := uuid.New(), uuid.New()
 	if err := g.RequestPosition(context.Background(), driverID, tripID); err != nil {
 		t.Fatalf("RequestPosition: %v", err)
@@ -51,7 +51,7 @@ func TestRequestPosition_ServerError_IsUnavailable(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	g := push.New(srv.URL, time.Second)
+	g := push.New(srv.URL, time.Second, nil)
 	err := g.RequestPosition(context.Background(), uuid.New(), uuid.New())
 	if !errors.Is(err, push.ErrUnavailable) {
 		t.Fatalf("err = %v, want ErrUnavailable", err)
@@ -64,7 +64,7 @@ func TestRequestPosition_TooManyRequests_IsUnavailable(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	g := push.New(srv.URL, time.Second)
+	g := push.New(srv.URL, time.Second, nil)
 	err := g.RequestPosition(context.Background(), uuid.New(), uuid.New())
 	if !errors.Is(err, push.ErrUnavailable) {
 		t.Fatalf("err = %v, want ErrUnavailable", err)
@@ -77,7 +77,7 @@ func TestRequestPosition_BadRequest_IsRejected(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	g := push.New(srv.URL, time.Second)
+	g := push.New(srv.URL, time.Second, nil)
 	err := g.RequestPosition(context.Background(), uuid.New(), uuid.New())
 	if !errors.Is(err, push.ErrRejected) {
 		t.Fatalf("err = %v, want ErrRejected", err)
@@ -91,7 +91,7 @@ func TestRequestPosition_Timeout(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	g := push.New(srv.URL, 5*time.Millisecond)
+	g := push.New(srv.URL, 5*time.Millisecond, nil)
 	err := g.RequestPosition(context.Background(), uuid.New(), uuid.New())
 	if !errors.Is(err, push.ErrUnavailable) {
 		t.Fatalf("err = %v, want ErrUnavailable (timeout)", err)

@@ -6,6 +6,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 const (
@@ -27,6 +31,7 @@ type Config struct {
 type task struct {
 	tripID   uuid.UUID
 	driverID uuid.UUID
+	scanLink trace.Link
 }
 
 type Pool struct {
@@ -37,6 +42,7 @@ type Pool struct {
 	log    logger
 	clk    clock
 	ticker Ticker
+	tracer trace.Tracer
 
 	queue chan task
 
@@ -50,7 +56,10 @@ type Pool struct {
 	cancel context.CancelFunc
 }
 
-func New(cfg Config, scan lister, push pusher, m metrics, log logger, clk clock, ticker Ticker) *Pool {
+func New(cfg Config, scan lister, push pusher, m metrics, log logger, clk clock, ticker Ticker, tracer trace.Tracer) *Pool {
+	if tracer == nil {
+		tracer = noop.NewTracerProvider().Tracer("positions")
+	}
 	return &Pool{
 		cfg:      cfg,
 		scan:     scan,
@@ -59,6 +68,7 @@ func New(cfg Config, scan lister, push pusher, m metrics, log logger, clk clock,
 		log:      log,
 		clk:      clk,
 		ticker:   ticker,
+		tracer:   tracer,
 		queue:    make(chan task, cfg.QueueSize),
 		queued:   make(map[uuid.UUID]struct{}, cfg.QueueSize),
 		stopScan: make(chan struct{}),
@@ -124,17 +134,25 @@ func (p *Pool) runScanner(ctx context.Context) {
 }
 
 func (p *Pool) tick(ctx context.Context) {
+	ctx, span := p.tracer.Start(ctx, "positions.scan_tick")
+	defer span.End()
+
 	trips, err := p.scan.ListStaleActive(ctx, p.cfg.StaleAfter, p.clk.Now())
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		p.log.ErrorCtx(ctx, "stale trips scan failed", "err", err)
 		return
 	}
+	span.SetAttributes(attribute.Int("positions.stale_trips_count", len(trips)))
+
+	scanLink := trace.LinkFromContext(ctx)
 	for _, t := range trips {
-		p.enqueue(ctx, t)
+		p.enqueue(ctx, t, scanLink)
 	}
 }
 
-func (p *Pool) enqueue(ctx context.Context, t StaleTrip) {
+func (p *Pool) enqueue(ctx context.Context, t StaleTrip, scanLink trace.Link) {
 	p.mu.Lock()
 	if _, ok := p.queued[t.TripID]; ok {
 		p.mu.Unlock()
@@ -145,7 +163,7 @@ func (p *Pool) enqueue(ctx context.Context, t StaleTrip) {
 	p.queued[t.TripID] = struct{}{}
 
 	select {
-	case p.queue <- task{tripID: t.TripID, driverID: t.DriverID}:
+	case p.queue <- task{tripID: t.TripID, driverID: t.DriverID, scanLink: scanLink}:
 		p.mu.Unlock()
 		p.m.StaleCheck(ctx, resultQueued)
 		p.m.QueueSizeAdd(ctx, 1)
@@ -182,6 +200,13 @@ func (p *Pool) process(ctx context.Context, t task) {
 		return
 	}
 
+	ctx, span := p.tracer.Start(ctx, "positions.process_task", trace.WithLinks(t.scanLink))
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("positions.trip_id", t.tripID.String()),
+		attribute.String("positions.driver_id", t.driverID.String()),
+	)
+
 	p.m.WorkersActiveAdd(ctx, 1)
 	defer p.m.WorkersActiveAdd(ctx, -1)
 
@@ -197,6 +222,8 @@ func (p *Pool) process(ctx context.Context, t task) {
 	p.mu.Unlock()
 
 	if pushErr != nil {
+		span.RecordError(pushErr)
+		span.SetStatus(codes.Error, pushErr.Error())
 		p.m.PositionRequestResult(ctx, resultError, elapsed)
 		p.log.WarnCtx(ctx, "push service request failed",
 			"trip_id", t.tripID, "driver_id", t.driverID, "err", pushErr)

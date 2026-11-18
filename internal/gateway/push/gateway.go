@@ -11,6 +11,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 const kindRequestPosition = "REQUEST_POSITION"
@@ -30,18 +34,39 @@ type pushRequest struct {
 type Gateway struct {
 	client  *http.Client
 	baseURL string
+	tracer  trace.Tracer
 }
 
-func New(baseURL string, timeout time.Duration) *Gateway {
+func New(baseURL string, timeout time.Duration, tracer trace.Tracer) *Gateway {
+	if tracer == nil {
+		tracer = noop.NewTracerProvider().Tracer("push")
+	}
 	return &Gateway{
 		client: &http.Client{
 			Timeout: timeout,
 		},
 		baseURL: baseURL,
+		tracer:  tracer,
 	}
 }
 
 func (g *Gateway) RequestPosition(ctx context.Context, driverID, tripID uuid.UUID) error {
+	ctx, span := g.tracer.Start(ctx, "push.request_position", trace.WithSpanKind(trace.SpanKindClient))
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("push.recipient_id", driverID.String()),
+		attribute.String("push.trip_id", tripID.String()),
+	)
+
+	err := g.doRequest(ctx, driverID, tripID)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
+}
+
+func (g *Gateway) doRequest(ctx context.Context, driverID, tripID uuid.UUID) error {
 	body, err := json.Marshal(pushRequest{
 		RequestID:   uuid.NewString(),
 		RecipientID: driverID,

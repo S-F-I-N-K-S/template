@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type noopTicker struct{ ch chan time.Time }
@@ -79,7 +80,7 @@ func newTestPool(push *stubPusher, m *stubMetrics) *Pool {
 	return New(
 		Config{Workers: 1, QueueSize: 1, RequestTimeout: time.Second},
 		stubLister{}, push, m, stubLogger{}, stubClock{now: time.Now()},
-		&noopTicker{ch: make(chan time.Time, 1)},
+		&noopTicker{ch: make(chan time.Time, 1)}, nil,
 	)
 }
 
@@ -88,8 +89,8 @@ func TestEnqueue_Dedup(t *testing.T) {
 	p := newTestPool(&stubPusher{}, m)
 	tripID, driverID := uuid.New(), uuid.New()
 
-	p.enqueue(context.Background(), StaleTrip{TripID: tripID, DriverID: driverID})
-	p.enqueue(context.Background(), StaleTrip{TripID: tripID, DriverID: driverID})
+	p.enqueue(context.Background(), StaleTrip{TripID: tripID, DriverID: driverID}, trace.Link{})
+	p.enqueue(context.Background(), StaleTrip{TripID: tripID, DriverID: driverID}, trace.Link{})
 
 	if got := m.results(); len(got) != 2 || got[0] != resultQueued || got[1] != resultDuplicate {
 		t.Errorf("StaleCheck results = %v, want [queued duplicate]", got)
@@ -104,8 +105,8 @@ func TestEnqueue_QueueFull_Dropped(t *testing.T) {
 	p := newTestPool(&stubPusher{}, m) // QueueSize: 1
 	a, b := uuid.New(), uuid.New()
 
-	p.enqueue(context.Background(), StaleTrip{TripID: a, DriverID: uuid.New()})
-	p.enqueue(context.Background(), StaleTrip{TripID: b, DriverID: uuid.New()})
+	p.enqueue(context.Background(), StaleTrip{TripID: a, DriverID: uuid.New()}, trace.Link{})
+	p.enqueue(context.Background(), StaleTrip{TripID: b, DriverID: uuid.New()}, trace.Link{})
 
 	if got := m.results(); len(got) != 2 || got[0] != resultQueued || got[1] != resultDropped {
 		t.Errorf("StaleCheck results = %v, want [queued dropped]", got)
@@ -120,8 +121,7 @@ func TestProcess_CancelledBeforeDequeue_SkipsPush(t *testing.T) {
 	p := newTestPool(push, &stubMetrics{})
 	tripID, driverID := uuid.New(), uuid.New()
 
-	p.enqueue(context.Background(), StaleTrip{TripID: tripID, DriverID: driverID})
-	// Координата пришла раньше, чем воркер успел взять задачу в обработку.
+	p.enqueue(context.Background(), StaleTrip{TripID: tripID, DriverID: driverID}, trace.Link{})
 	p.Cancel(tripID)
 
 	p.process(context.Background(), task{tripID: tripID, driverID: driverID})
@@ -136,7 +136,7 @@ func TestProcess_NotCancelled_CallsPush(t *testing.T) {
 	p := newTestPool(push, &stubMetrics{})
 	tripID, driverID := uuid.New(), uuid.New()
 
-	p.enqueue(context.Background(), StaleTrip{TripID: tripID, DriverID: driverID})
+	p.enqueue(context.Background(), StaleTrip{TripID: tripID, DriverID: driverID}, trace.Link{})
 	p.process(context.Background(), task{tripID: tripID, driverID: driverID})
 
 	if push.callCount() != 1 || push.lastTrip != tripID {
@@ -152,7 +152,7 @@ func TestProcess_PushError_StillUnmarksTrip(t *testing.T) {
 	p := newTestPool(push, &stubMetrics{})
 	tripID, driverID := uuid.New(), uuid.New()
 
-	p.enqueue(context.Background(), StaleTrip{TripID: tripID, DriverID: driverID})
+	p.enqueue(context.Background(), StaleTrip{TripID: tripID, DriverID: driverID}, trace.Link{})
 	p.process(context.Background(), task{tripID: tripID, driverID: driverID})
 
 	if push.callCount() != 1 {

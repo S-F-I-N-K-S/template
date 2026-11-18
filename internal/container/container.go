@@ -92,7 +92,7 @@ func New(ctx context.Context, cfg *config.Config) (*Container, error) {
 
 	errs := domainerror.NewWriter(log)
 
-	pushClient := pushgw.New(cfg.PushHTTPURL, cfg.PushRequestTimeout)
+	pushClient := pushgw.New(cfg.PushHTTPURL, cfg.PushRequestTimeout, tm.TracerProvider.Tracer("tripgo/gateway/push"))
 
 	workerPool := workerpositions.New(
 		workerpositions.Config{
@@ -108,6 +108,7 @@ func New(ctx context.Context, cfg *config.Config) (*Container, error) {
 		log,
 		systemClock{},
 		workerpositions.NewTicker(cfg.PositionCheckInterval),
+		tm.TracerProvider.Tracer("tripgo/worker/positions"),
 	)
 
 	createUC := ucCreate.New(txm, trips, history, systemClock{}, uuidGen{}, tripMetrics, log)
