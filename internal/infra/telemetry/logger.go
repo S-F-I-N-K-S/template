@@ -65,6 +65,10 @@ func (l *Logger) InfoCtx(ctx context.Context, msg string, args ...any) {
 	l.emit(ctx, log.SeverityInfo, slog.LevelInfo, msg, args...)
 }
 
+func (l *Logger) WarnCtx(ctx context.Context, msg string, args ...any) {
+	l.emit(ctx, log.SeverityWarn, slog.LevelWarn, msg, args...)
+}
+
 func (l *Logger) emit(ctx context.Context, sev log.Severity, level slog.Level, msg string, args ...any) {
 	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
 		args = append([]any{

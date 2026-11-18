@@ -18,6 +18,8 @@ import (
 
 var sq = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
 
+const columnStatus = "status"
+
 type Repository struct {
 	pool         *pgxpool.Pool
 	queryTimeout time.Duration
@@ -38,7 +40,7 @@ func (r *Repository) Save(ctx context.Context, t domaintrip.Trip) error {
 			"id", "user_id", "driver_id",
 			"start_latitude", "start_longitude",
 			"end_latitude", "end_longitude",
-			"price", "status", "started_at",
+			"price", columnStatus, "started_at",
 		).
 		Values(
 			t.ID, t.UserID, t.DriverID,
@@ -71,7 +73,7 @@ func (r *Repository) GetByID(ctx context.Context, id uuid.UUID) (domaintrip.Trip
 		"id", "user_id", "driver_id",
 		"start_latitude", "start_longitude",
 		"end_latitude", "end_longitude",
-		"price", "status", "started_at", "finished_at",
+		"price", columnStatus, "started_at", "finished_at",
 	).From("trips").Where(squirrel.Eq{"id": id}).ToSql()
 	if err != nil {
 		return domaintrip.Trip{}, fmt.Errorf("build select trip query: %w", err)
@@ -104,10 +106,10 @@ func (r *Repository) Finish(ctx context.Context, id uuid.UUID, finishedAt time.T
 	q := transaction.QuerierFromContext(ctx, r.pool)
 
 	query, args, err := sq.Update("trips").
-		Set("status", string(domaintrip.StatusCompleted)).
+		Set(columnStatus, string(domaintrip.StatusCompleted)).
 		Set("finished_at", finishedAt).
 		Set("updated_at", squirrel.Expr("now()")).
-		Where(squirrel.Eq{"id": id, "status": string(domaintrip.StatusActive)}).
+		Where(squirrel.Eq{"id": id, columnStatus: string(domaintrip.StatusActive)}).
 		ToSql()
 	if err != nil {
 		return fmt.Errorf("build update trip query: %w", err)

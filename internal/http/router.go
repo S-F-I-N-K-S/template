@@ -14,25 +14,31 @@ import (
 	"github.com/S-F-I-N-K-S/template/internal/http/trip/create"
 	"github.com/S-F-I-N-K-S/template/internal/http/trip/finish"
 	"github.com/S-F-I-N-K-S/template/internal/http/trip/get"
+	positionlist "github.com/S-F-I-N-K-S/template/internal/http/trip/position/list"
+	positionsave "github.com/S-F-I-N-K-S/template/internal/http/trip/position/save"
 )
 
 type Deps struct {
-	Create  *create.Handler
-	Get     *get.Handler
-	Finish  *finish.Handler
-	Health  *health.Handler
-	Errs    *domainerror.Writer
-	Logger  middleware.Logger
-	Metrics middleware.Instruments
-	Tracer  trace.TracerProvider
+	Create       *create.Handler
+	Get          *get.Handler
+	Finish       *finish.Handler
+	SavePosition *positionsave.Handler
+	ListPosition *positionlist.Handler
+	Health       *health.Handler
+	Errs         *domainerror.Writer
+	Logger       middleware.Logger
+	Metrics      middleware.Instruments
+	Tracer       trace.TracerProvider
 }
 
 type Server struct {
 	api.Unimplemented
-	create *create.Handler
-	get    *get.Handler
-	finish *finish.Handler
-	health *health.Handler
+	create       *create.Handler
+	get          *get.Handler
+	finish       *finish.Handler
+	savePosition *positionsave.Handler
+	listPosition *positionlist.Handler
+	health       *health.Handler
 }
 
 func (s *Server) CreateTrip(w stdhttp.ResponseWriter, r *stdhttp.Request, params api.CreateTripParams) {
@@ -45,6 +51,14 @@ func (s *Server) GetTrip(w stdhttp.ResponseWriter, r *stdhttp.Request, tripID ap
 
 func (s *Server) FinishTrip(w stdhttp.ResponseWriter, r *stdhttp.Request, tripID api.TripId) {
 	s.finish.Handle(w, r, tripID)
+}
+
+func (s *Server) CreateTripPosition(w stdhttp.ResponseWriter, r *stdhttp.Request, tripID api.TripId) {
+	s.savePosition.Handle(w, r, tripID)
+}
+
+func (s *Server) ListTripPositions(w stdhttp.ResponseWriter, r *stdhttp.Request, tripID api.TripId) {
+	s.listPosition.Handle(w, r, tripID)
 }
 
 func (s *Server) Health(w stdhttp.ResponseWriter, r *stdhttp.Request) {
@@ -63,10 +77,12 @@ func NewRouter(d Deps) stdhttp.Handler {
 	r.Use(middleware.NewMetrics(d.Metrics))
 
 	handler := api.HandlerWithOptions(&Server{
-		create: d.Create,
-		get:    d.Get,
-		finish: d.Finish,
-		health: d.Health,
+		create:       d.Create,
+		get:          d.Get,
+		finish:       d.Finish,
+		savePosition: d.SavePosition,
+		listPosition: d.ListPosition,
+		health:       d.Health,
 	}, api.ChiServerOptions{
 		BaseRouter:       r,
 		ErrorHandlerFunc: d.Errs.RequestError,

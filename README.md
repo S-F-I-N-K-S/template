@@ -36,19 +36,6 @@ Go». Принимает HTTP-запросы на создание, получе
 
    Сервис слушает `HTTP_ADDR` (по умолчанию `:8080`).
 
-4. Проверить:
-
-```bash
-   curl -sS localhost:8080/health
-   curl -sS localhost:8080/ready
-
-   curl -sS -X POST localhost:8080/api/v1/trips \
-     -H 'content-type: application/json' \
-     -d '{"user_id":"5cb72c04-7650-45c9-a79b-bcdba0631e0c",
-          "driver_id":"8860b315-ec86-42eb-a17c-7c163d721ff5",
-          "start_point":{"latitude":59.9398,"longitude":30.3146},
-          "end_point":{"latitude":59.9290,"longitude":30.3626},
-          "price":1450}' | jq
 ```
 
 ## Makefile
